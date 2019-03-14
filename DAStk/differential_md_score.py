@@ -107,13 +107,13 @@ def get_differential_md_scores(label):
     if n2 <= 70:
          #print('%s had an MD-score of 0 in %s' % (label, args.assay_2))
         p2 = .1
-    if n1 >= 70:
+
+    if n1 > 70:
         control_bc_boot = control_bc_array.astype(int)
-        
         # configure bootstrap
         values = control_bc_boot
-        control_n_iterations = 599
-        control_n_size = int(len(control_bc_boot) * 0.1)
+        control_n_iterations = 1099
+        control_n_size = int(len(control_bc_boot) * 0.5)
         # run bootstrap
         stats = list()
         for i in range(control_n_iterations):
@@ -121,16 +121,14 @@ def get_differential_md_scores(label):
             train = resample(values, n_samples=control_n_size, replace=True)
             a = np.var(train)
             stats.append(a)
-        control_bootstrap = np.log(np.median(stats)) / 10
+        control_bootstrap = abs(np.log(np.median(stats))) / 10
     
-                
-    if n2 >=70:            
+    if n2 > 70:
         perturbation_bc_boot = perturbation_bc_array.astype(int)
-        
         # configure bootstrap
         values = perturbation_bc_boot
-        perturbation_n_iterations = 599
-        perturbation_n_size = int(len(perturbation_bc_boot) * 0.1)
+        perturbation_n_iterations = 1099
+        perturbation_n_size = int(len(perturbation_bc_boot) * 0.5)
         # run bootstrap
         stats = list()
         for i in range(perturbation_n_iterations):
@@ -138,24 +136,30 @@ def get_differential_md_scores(label):
             train = resample(values, n_samples=perturbation_n_size, replace=True)
             a = np.var(train)
             stats.append(a)
-        perturbation_bootstrap = np.log(np.median(stats)) / 10 
+        perturbation_bootstrap = abs(np.log(np.median(stats))) / 10
 
     if (args.chip):
-        if n1 <= 70:
+        if n1 < 70:
             z_value = (p1 - p2) / np.sqrt(perturbation_bootstrap  / n2)
-        elif n2 <= 70:
+        elif n2 < 70:
             z_value = (p1 - p2) / np.sqrt(control_bootstrap  / n2)
-        elif (n1 <= 70) & (n2 <= 70):
+        elif (n1 < 70) & (n2 < 70):
             z_value = (p1 - p2)
             print('There were not enough regions to calculate the differential MDS for motif %s.' % label)
         else:
             z_value = (p1 - p2) / np.sqrt((control_bootstrap / n1) + (perturbation_bootstrap  / n2))
 
     else:
-        if n1 <=70:
-            z_value = (p1 - p2) / np.sqrt((perturbation_bootstrap  / n2) * 2)
-        elif n2 <= 70:
-            z_value = (p1 - p2) / np.sqrt((control_bootstrap  / n2) * 2)
+        if (n1 <= 70) & (n2 > 70):
+            x1 = p1 * n1
+            x2 = p2 * n2
+            pooled = (x1 + x2)/(n1 + n2)
+            z_value = (p1 - p2) / np.sqrt(pooled * (1 - pooled) * ((1/n1) + (1/n2)))
+        elif (n2 <= 70) & (n1 > 70):
+            x1 = p1 * n1
+            x2 = p2 * n2
+            pooled = (x1 + x2)/(n1 + n2)
+            z_value = (p1 - p2) / np.sqrt(pooled * (1 - pooled) * ((1/n1) + (1/n2)))
         elif (n1 <= 70) & (n2 <= 70):
             z_value = (p1 - p2)
             print('There were not enough regions to calculate the differential MDS for motif %s.' % label)
@@ -203,8 +207,6 @@ with concurrent.futures.ProcessPoolExecutor(threads) as executor:
     jobs = [executor.submit(get_differential_md_scores, label)
                for label in labels]
     differential_results = [r.result() for r in jobs]
-
-print(differential_results)
 
 sorted_differential_stats = sorted(differential_results, key=itemgetter('p_value'))
 
