@@ -32,9 +32,9 @@ parser = argparse.ArgumentParser(description='This script produces an MA plot of
 parser.add_argument('-p', '--p-value', dest='p_value', metavar='P_VALUE', \
                     help='p-value cutoff to define which motifs to label in the MA plot. Defaults to 0.00001.', default=0.00001, required=False)
 parser.add_argument('-1', '--assay-1', dest='assay_1', metavar='ASSAY_1', \
-                    help='Conditions label for the reference/control assay of the differential pair (e.g. "DMSO", "control", "wildtype"). This will be the rootname before _md_scores.txt generated from process_atac. Used to find the proper file with the calculated MD-scores and on the plot labels.', required=True)
+                    help='Control file generated from process_atac ending in the extension "md_scores.txt" (e.g. "DMSO", "control", "wildtype").', required=True)
 parser.add_argument('-2', '--assay-2', dest='assay_2', metavar='ASSAY_2', \
-                    help='Conditions label for the perturbation assay of the differential pair (e.g., "doxycyclin", "p53_knockout"). This will be the rootname before _md_scores.txt generated from process_atac. Used to find the proper file with the calculated MD-scores and on the plot labels.', required=True)
+                    help='Perturbation file generated from process_atac ending in the extension "md_scores.txt" (e.g., "doxycyclin", "p53_knockout").', required=True)
 parser.add_argument('-m', '--label-1', dest='label_1', metavar='LABEL_1', \
                     help='Label for the MA plot title corresponding to assay 1', required=False)
 parser.add_argument('-n', '--label-2', dest='label_2', metavar='LABEL_2', \
@@ -102,10 +102,8 @@ def get_differential_md_scores(label):
     control_bc_array = np.array(control_barcode.split(';'))
     
     if n1 <= 70:
-         #print('%s had an MD-score of 0 in %s' % (label, args.assay_1))
         p1 = .1
     if n2 <= 70:
-         #print('%s had an MD-score of 0 in %s' % (label, args.assay_2))
         p2 = .1
 
     if n1 > 70:
@@ -139,11 +137,11 @@ def get_differential_md_scores(label):
         perturbation_bootstrap = abs(np.log(np.median(stats))) / 10
 
     if (args.chip):
-        if n1 < 70:
+        if (n1 <= 70) & (n2 > 70):
             z_value = (p1 - p2) / np.sqrt(perturbation_bootstrap  / n2)
-        elif n2 < 70:
+        elif (n2 <= 70) & (n1 > 70):
             z_value = (p1 - p2) / np.sqrt(control_bootstrap  / n2)
-        elif (n1 < 70) & (n2 < 70):
+        elif (n1 <= 70) & (n2 <= 70):
             z_value = (p1 - p2)
             print('There were not enough regions to calculate the differential MDS for motif %s.' % label)
         else:
