@@ -60,7 +60,7 @@ print('Starting --- ' + str(datetime.datetime.now()))
 
 control_mds = {}
 control_nr_peaks = {}
-control_barcode = {}
+control_barcodes = {}
 control_total_motifs = {}
 labels = []
 control_fd = open('%s' % args.assay_1)
@@ -71,10 +71,10 @@ for line in control_fd:
         labels.append(line_chunks[0][:-4])
         control_nr_peaks[line_chunks[0][:-4]] = round(float(line_chunks[3]))
         control_total_motifs[line_chunks[0][:-4]] = int(line_chunks[4])
-        control_barcode[line_chunks[0][:-4]] = line_chunks[5]
+        control_barcodes[line_chunks[0][:-4]] = line_chunks[5]
 perturbation_mds = {}
 perturbation_nr_peaks = {}
-perturbation_barcode = {}
+perturbation_barcodes = {}
 perturbation_total_motifs = {}
 perturbation_fd = open('%s' % args.assay_2)
 for line in perturbation_fd:
@@ -84,33 +84,32 @@ for line in perturbation_fd:
         perturbation_mds[line_chunks[0][:-4]] = float(line_chunks[1])
         perturbation_nr_peaks[line_chunks[0][:-4]] = round(float(line_chunks[3]))
         perturbation_total_motifs[line_chunks[0][:-4]] = int(line_chunks[4])
-        perturbation_barcode[line_chunks[0][:-4]] = line_chunks[5]
-
+        perturbation_barcodes[line_chunks[0][:-4]] = line_chunks[5]
+        
 def get_differential_md_scores(label):
     control = float(control_mds[label])
     perturbation = float(perturbation_mds[label])
     nr_peaks = np.log2(float(control_nr_peaks[label]) + float(perturbation_nr_peaks[label]))
     fold_change = float(perturbation_mds[label]) - float(control_mds[label])
+    control_barcode = control_barcodes[label]
+    perturbation_barcode = perturbation_barcodes[label]    
     p1 = float(control_mds[label])
     p2 = float(perturbation_mds[label])
     n1 = float(control_nr_peaks[label])
     n2 = float(perturbation_nr_peaks[label])
-    #p1 = .1
-    #p2 = .67
-    #n1 = 10
-    #n2 = 13000
+    #for line in perturbation_barcode:
+    perturbation_bc_array = np.array(perturbation_barcode.split(';'))
+    control_bc_array = np.array(control_barcode.split(';'))
+    
     if n1 <= 70:
          #print('%s had an MD-score of 0 in %s' % (label, args.assay_1))
         p1 = .1
     if n2 <= 70:
          #print('%s had an MD-score of 0 in %s' % (label, args.assay_2))
         p2 = .1
-
-    for line in control_barcode:
-        control_bc_array = np.array(control_barcode[line].split(';'))
+    if n1 >= 70:
         control_bc_boot = control_bc_array.astype(int)
-        #print(control_bc_boot)
-
+        
         # configure bootstrap
         values = control_bc_boot
         control_n_iterations = 599
@@ -122,12 +121,12 @@ def get_differential_md_scores(label):
             train = resample(values, n_samples=control_n_size, replace=True)
             a = np.var(train)
             stats.append(a)
-        control_bootstrap = np.median(stats) / 10
-
-    for line in perturbation_barcode:
-        perturbation_bc_array = np.array(perturbation_barcode[line].split(';'))
+        control_bootstrap = np.log(np.median(stats)) / 10
+    
+                
+    if n2 >=70:            
         perturbation_bc_boot = perturbation_bc_array.astype(int)
-
+        
         # configure bootstrap
         values = perturbation_bc_boot
         perturbation_n_iterations = 599
@@ -139,7 +138,7 @@ def get_differential_md_scores(label):
             train = resample(values, n_samples=perturbation_n_size, replace=True)
             a = np.var(train)
             stats.append(a)
-        perturbation_bootstrap = np.median(stats) / 10
+        perturbation_bootstrap = np.log(np.median(stats)) / 10 
 
     if (args.chip):
         if n1 <= 70:
@@ -283,7 +282,7 @@ if args.gen_barcode:
         plt.title('Barcode plots for %s' % relevant_tf)
         fig, (ax0, ax1) = plt.subplots(ncols=2)
 
-        control_bc_data = np.array(control_barcode[relevant_tf].split(';'))
+        control_bc_data = np.array(control_barcodes[relevant_tf].split(';'))
         # Condense the barcode to half the bins for prettier display
         control_bc_data = control_bc_data.astype(int)
         heat_m = np.nan * np.empty(shape=(int(HISTOGRAM_BINS/4), HISTOGRAM_BINS))
@@ -294,7 +293,7 @@ if args.gen_barcode:
         ax0.text(HISTOGRAM_BINS/2, HISTOGRAM_BINS/2, 'N(total) = %d\nMD-score = %.3f' % (control_nr_peaks[relevant_tf], control_mds[relevant_tf]), ha='center', size=18, zorder=0)
         ax0.text(HISTOGRAM_BINS/2, -10, assay_1_prefix, ha='center', size=18, zorder=0)
 
-        perturbation_bc_data = np.array(perturbation_barcode[relevant_tf].split(';'))
+        perturbation_bc_data = np.array(perturbation_barcodes[relevant_tf].split(';'))
         perturbation_bc_data = perturbation_bc_data.astype(float)
         heat_m = np.nan * np.empty(shape=(int(HISTOGRAM_BINS/4), HISTOGRAM_BINS))
         for row in range(int(HISTOGRAM_BINS/4)):
