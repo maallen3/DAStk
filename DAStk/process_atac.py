@@ -40,10 +40,14 @@ def is_in_window(motif_interval, atac_median, window_size):
 
 
 # this will be ran in parallel
-def find_motifs_in_chrom(current_chrom, files):
+def find_motifs_in_chrom(current_chrom, files,verboseoption,output_dir):
     tf_motif_filename, atac_peaks_filename = files
     H = 1500          # in bps, the MD-score parameter (large window)
     h = 150           # in bps, the MD-score parameter (small window)
+    #rootTF = tf_motif_filename.split("/")[-1]
+    if verboseoption=="True":
+        rootTF = os.path.splitext(os.path.basename(tf_motif_filename))[0]+"_"
+        output_prefix = os.path.splitext(os.path.basename(atac_peaks_filename))[0]
     REPRESSOR_MARGIN = 500      # in bps, distance from the large window boundaries
 
     atac_df = pd.read_csv(atac_peaks_filename, header=None, comment='#', sep="\t", usecols=[0, 1, 2], \
@@ -55,12 +59,11 @@ def find_motifs_in_chrom(current_chrom, files):
         return None
     motif_iter = motif_df[(motif_df.chrom == current_chrom)].itertuples()
     last_motif = None
-    g_h = 0
-    g_H = 0
     total_motif_sites = 0
-    tf_distances = []
+    keepoverlaps = []
     try:
         motif_region = next(motif_iter)   # get the first motif in the list
+        total_motif_sites += 1
     except StopIteration:
         print('No motifs for chromosome ' + current_chrom + ' on file ' + tf_motif_filename)
         return None
@@ -73,13 +76,10 @@ def find_motifs_in_chrom(current_chrom, files):
         # check the last motif, too, in case any of them falls within the region of
         # interest of two sequential ATAC-Seq peaks
         if last_motif:
-            if is_in_window(last_motif, atac_median, h):
-                g_h = g_h + 1
+            # account for those within the larger window (H)
             if is_in_window(last_motif, atac_median, H):
-                g_H = g_H + 1
-                tf_median = last_motif.start + \
-                            (last_motif.end - last_motif.start)/2
-                tf_distances.append(atac_median - tf_median)
+                line = [current_chrom, motif_region.start, motif_region.end, current_chrom, atac_peak.start, atac_peak.end, "added by if to g_H"]
+                keepoverlaps.append(line)
                 try:
                     motif_region = next(motif_iter)   # get the next motif in the list
                     total_motif_sites += 1
@@ -91,17 +91,10 @@ def find_motifs_in_chrom(current_chrom, files):
 
         # Move to the next putative motif sites until we get one past our evaluation window
         while motifs_within_region:
-            total_motif_sites += 1
-            # account for those within the smaller window (h)
-            if is_in_window(motif_region, atac_median, h):
-                g_h = g_h + 1
             # account for those within the larger window (H)
             if is_in_window(motif_region, atac_median, H):
-                g_H = g_H + 1
-                tf_median = motif_region.start + (motif_region.end - \
-                            motif_region.start)/2
-                tf_distances.append(atac_median - tf_median)
-
+                line = [current_chrom, motif_region.start, motif_region.end, current_chrom, atac_peak.start, atac_peak.end, "added by while to g_H"]
+                keepoverlaps.append(line)
             # if we still haven't shifted past this peak...
             if motif_region.start <= (atac_median + H):
                 try:
@@ -113,27 +106,99 @@ def find_motifs_in_chrom(current_chrom, files):
                 last_motif = motif_region
             else:
                 motifs_within_region = False
-
     # Count any remaining TF motif sites after the last ATAC peak
     while(len(motif_region) > 0):
         try:
             motif_region = next(motif_iter)   # this gets the next motif in the list
+            total_motif_sites += 1
         except StopIteration:
             break
+    df = pd.DataFrame.from_records(keepoverlaps, columns=["motif_region.chrom", "motif_region.start", "motif_region.end", "atac.chrom", "atac_peak.start", "atac_peak.end", "added by"])
+    if verboseoption=="True":
+        filename = output_dir+rootTF+output_prefix+"_all.bed"
+        if not os.path.exists(filename):
+            df.to_csv(filename)
+        else:
+            df.to_csv(filename,mode='a', header=False)
+    df = df.drop(['added by'], axis=1)
+    dupdf = df[df.duplicated()]
+    dupdfrows, dupdfcolumns = dupdf.shape
+    if dupdfrows>0:
+       if verboseoption=="True":
+          filename = output_dir+rootTF+output_prefix+"_dups.bed"
+          if not os.path.exists(filename):
+             dupdf.to_csv(filename)
+          else:
+             dupdf.to_csv(filename,mode='a', header=False)
+       df = df.drop_duplicates()
+       if verboseoption=="True":
+          filename = output_dir+rootTF+output_prefix+"_dropdups.bed"
+          if not os.path.exists(filename):
+             df.to_csv(filename)
+          else:
+             df.to_csv(filename,mode='a', header=False)
+    allmotifstarts = (df["motif_region.start"].tolist())
+    df["atac_median"] = df["atac_peak.start"] + (df["atac_peak.end"] - df["atac_peak.start"])/2
+    df["motif_median"] = df["motif_region.start"] + (df["motif_region.end"] - df["motif_region.start"])/2
+    df["tf_distance"] = df["atac_median"]-df["motif_median"]
+    dfrows, dfcolumns = df.shape
+    removemotifscountedmorethanonce=True #this is there in case people only want the motif assigend to one ATAC peak
+    removemotififmidisoutsideH=True #this allows people to remove motifs that are to close to the edge of H to be drawn in the barcode
+    if removemotifscountedmorethanonce:
+        problems = list(set([i for i in allmotifstarts if allmotifstarts.count(i)>1]))
+        if len(problems)>0:
+            df["keep"]=df.apply(lambda row: markeachproblem(df, row["motif_region.start"], row["atac_peak.start"], problems), axis=1)
+            dfrows_filterproblemmotifs, dfcolumns_filterproblemmotifs = df.shape
+            if verboseoption=="True":
+                filename = output_dir+rootTF+output_prefix+"_removerepeatmotifs.bed"
+                if not os.path.exists(filename):
+                    df.to_csv(filename)
+                else:
+                    df.to_csv(filename,mode='a', header=False)
+            df = df[df["keep"]=="Y"]
+            df = df.drop(['keep'], axis=1)
+    if removemotififmidisoutsideH:
+        g_Hdf = df[df['tf_distance']<=H]
+        g_Hdfrows, g_Hdfcolumns = g_Hdf.shape
+        if verboseoption=="True":
+            filename = output_dir+rootTF+output_prefix+"_withinH.bed"
+            if not os.path.exists(filename):
+                g_Hdf.to_csv(filename)
+            else:
+                g_Hdf.to_csv(filename,mode='a', header=False)
+        g_hdf = g_Hdf[(g_Hdf['tf_distance']<=h) & (g_Hdf['tf_distance']>=-h)]
+        g_hdfrows, g_hdfcolumns = g_hdf.shape
+        tf_distances = g_Hdf["tf_distance"].tolist()
+    else:
+        g_Hdfrows, g_Hdfcolumns = df.shape
+        g_hdf = df[(df['tf_distance']<=h) & (df['tf_distance']>=-h)]
+        g_hdfrows, g_hdfcolumns = g_hdf.shape
+        tf_distances = df["tf_distance"].tolist()
+    return [tf_distances, g_hdfrows, g_Hdfrows, total_motif_sites]
 
-    return [tf_distances, g_h, g_H, total_motif_sites]
 
+def markeachproblem(df, motifstart, atacstart, problems):
+    if motifstart in problems:
+        thismotifdf = df[df["motif_region.start"]==motifstart]
+        mindis = df["tf_distance"].min()
+        correctatacstartdf = thismotifdf[thismotifdf["tf_distance"]==thismotifdf["tf_distance"].min()]
+        correctatacstart = correctatacstartdf["atac_peak.start"].tolist()[0]#atac_peak.start
+        if atacstart==correctatacstart:
+            return "Y"
+        else:
+            return "N"
+    else:
+        return "Y"
 
-def get_md_score(tf_motif_filename, mp_threads, atac_peaks_filename, genome):
+def get_md_score(tf_motif_filename, mp_threads, atac_peaks_filename, genome,verboseoption,output_dir):
     #Get chromosomes for mutliprocessing
     chr_size_file = pybedtools.chromsizes(genome)
     unique_chr = list(chr_size_file.keys())[0:]
     CHROMOSOMES = [word for word in unique_chr if len(word) <= 6]
-
     HISTOGRAM_BINS = 150
     pool = multiprocessing.Pool(mp_threads)
     results = pool.map(partial( find_motifs_in_chrom, \
-                                files=[tf_motif_filename, atac_peaks_filename]), \
+                                files=[tf_motif_filename, atac_peaks_filename],verboseoption=verboseoption,output_dir=output_dir), \
                        CHROMOSOMES)
     pool.close()
     pool.join()
@@ -178,8 +243,13 @@ def main():
     parser.add_argument('-o', '--output', dest='output_dir', \
                         help='Path to where scores file will be saved. Save output will be your peak file rootname + _md_scores.txt.', \
                         default='', required=True)
+    parser.add_argument('--verbose',action='store_true',\
+                        help='This will output files in the outdirectory that contain the overlap of ATAC peaks and motifs for each chromosome.')
     args = parser.parse_args()
-
+    verboseoption="False"
+    if args.verbose:
+        verboseoption="True"
+        print ("verbose is on")
     #evaluation_radius = 750   # in bps
     ATAC_WIDTH_THRESHOLD = 5000   # in bp
 
@@ -230,7 +300,7 @@ def main():
         filename_no_path = filename.split('/')[-1]
         if os.path.getsize(filename) > 0 and \
            os.path.basename(filename).endswith(tuple(['.bed', '.BedGraph', '.txt'])):
-            [md_score, small_window, large_window, motif_site_count, heat] = get_md_score(filename, int(args.mp_threads), args.atac_peaks_filename, args.genome)
+            [md_score, small_window, large_window, motif_site_count, heat] = get_md_score(filename, int(args.mp_threads), args.atac_peaks_filename, args.genome,verboseoption, args.output_dir)
             print('The MD-score for ATAC reads vs %s is %.6f' % (filename_no_path, md_score))
             motif_stats.append({ 'motif_file': filename_no_path, \
                                  'md_score': md_score, \
