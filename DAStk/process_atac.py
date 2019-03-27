@@ -38,18 +38,53 @@ def is_in_window(motif_interval, atac_median, window_size):
     else:
         return False
 
-
+def makebed12(finaldf, tf_motif_filename, atac_peaks_filename):
+    atac_df = pd.read_csv(atac_peaks_filename, header=None, comment='#', sep="\t", na_filter=False)
+    motif_df = pd.read_csv(tf_motif_filename, header=None, comment='#', sep="\t")
+    atac_cols = len(atac_df.columns)
+    motif_cols = len(motif_df.columns)
+    print ("atac header", len(atac_df.columns))
+    #step 1 pull in the atac and motif files and make them 6 column bed files, even if they are not 6 column bed files
+    if atac_cols==3:
+        atac_df = pd.read_csv(atac_peaks_filename, header=None, comment='#', sep="\t", na_filter=False, usecols=[0, 1, 2],names=["atac.chrom","atac_peak.start","atac_peak.end"])
+        atac_df['atac_peak.name']='.'    
+        atac_df['atac_peak.strand']='.'
+        atac_df['atac_peak.score']='.'
+    if atac_cols>=4:
+        if atac_cols>=6:
+    	    atac_df = pd.read_csv(atac_peaks_filename, header=None, comment='#', sep="\t", na_filter=False, usecols=[0, 1, 2,3,4,5],names=["atac.chrom","atac_peak.start","atac_peak.end", "atac_peak.name", "atac_peak.strand","atac_peak.score"])
+        else:
+            atac_df = pd.read_csv(atac_peaks_filename, header=None, comment='#', sep="\t", na_filter=False, usecols=[0, 1, 2,3],names=["atac.chrom","atac_peak.start","atac_peak.end", "atac_peak.name"])
+            atac_df['atac_peak.strand']='.'
+            atac_df['atac_peak.score']='.'
+    if motif_cols==3:
+        motif_df = pd.read_csv(tf_motif_filename, header=None, comment='#', sep="\t",usecols=[0, 1, 2],names=["motif_region.chrom","motif_region.start","motif_region.end"])
+        motif_df['motif_region.name']='.'
+        motif_df['motif_region.strand']='.'
+        motif_df['motif_region.score']='.'
+    if motif_cols>=4:
+        if motif_cols>=6:
+            motif_df = pd.read_csv(tf_motif_filename, header=None, comment='#', sep="\t",usecols=[0, 1, 2,3,4,5],names=["motif_region.chrom","motif_region.start","motif_region.end", "motif_region.name", "motif_region.strand","motif_region.score"])
+        else:
+            motif_df = pd.read_csv(tf_motif_filename, header=None, comment='#', sep="\t",usecols=[0, 1, 2,3],names=["motif_region.chrom","motif_region.start","motif_region.end", "motif_region.name"])
+            motif_df['motif_region.strand']='.'
+            motif_df['motif_region.score']='.'
+    #step 2 merge them with the final dataframe
+    new_df = pd.merge(finaldf, motif_df,  how='left', left_on=['motif_region.chrom','motif_region.start','motif_region.end'], right_on = ['motif_region.chrom','motif_region.start','motif_region.end'])
+    new_df = pd.merge(new_df, atac_df,  how='left', left_on=["atac.chrom","atac_peak.start","atac_peak.end"], right_on = ["atac.chrom","atac_peak.start","atac_peak.end"])
+    #step three, put the columns in the order I want
+    out_df = new_df[["motif_region.chrom","motif_region.start","motif_region.end", "motif_region.name","atac.chrom","atac_peak.start","atac_peak.end", "atac_peak.name", "atac_peak.strand","atac_peak.score"]]
+    print (out_df)
+    return out_df
+    
 # this will be ran in parallel
-def find_motifs_in_chrom(current_chrom, files,verboseoption,output_dir):
+def find_motifs_in_chrom(current_chrom, files,verboseoption,bedfilenamepre,removemotifscountedmorethanonce,removemotififmidisoutsideH):
+    testmode=True
     tf_motif_filename, atac_peaks_filename = files
     H = 1500          # in bps, the MD-score parameter (large window)
     h = 150           # in bps, the MD-score parameter (small window)
     #rootTF = tf_motif_filename.split("/")[-1]
-    if verboseoption=="True":
-        rootTF = os.path.splitext(os.path.basename(tf_motif_filename))[0]+"_"
-        output_prefix = os.path.splitext(os.path.basename(atac_peaks_filename))[0]
     REPRESSOR_MARGIN = 500      # in bps, distance from the large window boundaries
-
     atac_df = pd.read_csv(atac_peaks_filename, header=None, comment='#', sep="\t", usecols=[0, 1, 2], \
                           names=['chrom', 'start', 'end'], na_filter=False, dtype={'chrom':'str', 'start':'int', 'end':'int'})
     atac_iter = atac_df[(atac_df.chrom == current_chrom)].itertuples()
@@ -115,28 +150,26 @@ def find_motifs_in_chrom(current_chrom, files,verboseoption,output_dir):
             break
     df = pd.DataFrame.from_records(keepoverlaps, columns=["motif_region.chrom", "motif_region.start", "motif_region.end", "atac.chrom", "atac_peak.start", "atac_peak.end", "added by"])
     if verboseoption=="True":
-        filename = output_dir+rootTF+output_prefix+"_all.bed"
-        if not os.path.exists(filename):
-            df.to_csv(filename)
-        else:
-            df.to_csv(filename,mode='a', header=False)
+        filename = bedfilenamepre+"__"+current_chrom+"_all.bed"
+        df.to_csv(filename)
     df = df.drop(['added by'], axis=1)
     dupdf = df[df.duplicated()]
+    if verboseoption=="True":
+        if testmode:
+            filename = bedfilenamepre+"__"+current_chrom+".bed"
+            df.to_csv(filename) 
     dupdfrows, dupdfcolumns = dupdf.shape
-    if dupdfrows>0:
-       if verboseoption=="True":
-          filename = output_dir+rootTF+output_prefix+"_dups.bed"
-          if not os.path.exists(filename):
-             dupdf.to_csv(filename)
+    df = df.drop_duplicates()
+    if verboseoption=="True":
+          if testmode:
+              filename = bedfilenamepre+"__"+current_chrom+"_dropdups.bed"
+              df.to_csv(filename)
+              if dupdfrows>0:
+                  filename = bedfilenamepre+"__"+current_chrom+"_dups.bed"
+                  dupdf.to_csv(filename)
           else:
-             dupdf.to_csv(filename,mode='a', header=False)
-       df = df.drop_duplicates()
-       if verboseoption=="True":
-          filename = output_dir+rootTF+output_prefix+"_dropdups.bed"
-          if not os.path.exists(filename):
+             filename = bedfilenamepre+"__"+current_chrom+".bed"
              df.to_csv(filename)
-          else:
-             df.to_csv(filename,mode='a', header=False)
     allmotifstarts = (df["motif_region.start"].tolist())
     df["atac_median"] = df["atac_peak.start"] + (df["atac_peak.end"] - df["atac_peak.start"])/2
     df["motif_median"] = df["motif_region.start"] + (df["motif_region.end"] - df["motif_region.start"])/2
@@ -150,22 +183,24 @@ def find_motifs_in_chrom(current_chrom, files,verboseoption,output_dir):
             df["keep"]=df.apply(lambda row: markeachproblem(df, row["motif_region.start"], row["atac_peak.start"], problems), axis=1)
             dfrows_filterproblemmotifs, dfcolumns_filterproblemmotifs = df.shape
             if verboseoption=="True":
-                filename = output_dir+rootTF+output_prefix+"_removerepeatmotifs.bed"
-                if not os.path.exists(filename):
-                    df.to_csv(filename)
+                if testmode:
+                   filename = bedfilenamepre+"__"+current_chrom+"_removerepeatmotifs.bed"
+                   df.to_csv(filename)
                 else:
-                    df.to_csv(filename,mode='a', header=False)
+                   filename = bedfilenamepre+"__"+current_chrom+".bed"
+                   df.to_csv(filename)
             df = df[df["keep"]=="Y"]
             df = df.drop(['keep'], axis=1)
     if removemotififmidisoutsideH:
         g_Hdf = df[df['tf_distance']<=H]
         g_Hdfrows, g_Hdfcolumns = g_Hdf.shape
         if verboseoption=="True":
-            filename = output_dir+rootTF+output_prefix+"_withinH.bed"
-            if not os.path.exists(filename):
+            if testmode:
+                filename = bedfilenamepre+"__"+current_chrom+"_withinH.bed"
                 g_Hdf.to_csv(filename)
             else:
-                g_Hdf.to_csv(filename,mode='a', header=False)
+                filename = bedfilenamepre+"__"+current_chrom+".bed"
+                g_Hdf.to_csv(filename)
         g_hdf = g_Hdf[(g_Hdf['tf_distance']<=h) & (g_Hdf['tf_distance']>=-h)]
         g_hdfrows, g_hdfcolumns = g_hdf.shape
         tf_distances = g_Hdf["tf_distance"].tolist()
@@ -176,6 +211,11 @@ def find_motifs_in_chrom(current_chrom, files,verboseoption,output_dir):
         tf_distances = df["tf_distance"].tolist()
     return [tf_distances, g_hdfrows, g_Hdfrows, total_motif_sites]
 
+
+def ensure_dir(file_path):
+    directory = os.path.dirname(file_path)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
 
 def markeachproblem(df, motifstart, atacstart, problems):
     if motifstart in problems:
@@ -190,19 +230,29 @@ def markeachproblem(df, motifstart, atacstart, problems):
     else:
         return "Y"
 
-def get_md_score(tf_motif_filename, mp_threads, atac_peaks_filename, genome,verboseoption,output_dir):
+def get_md_score(tf_motif_filename, mp_threads, atac_peaks_filename, genome,verboseoption,output_dir,removemotifscountedmorethanonce,removemotififmidisoutsideH):
     #Get chromosomes for mutliprocessing
     chr_size_file = pybedtools.chromsizes(genome)
     unique_chr = list(chr_size_file.keys())[0:]
     CHROMOSOMES = [word for word in unique_chr if len(word) <= 6]
+    if verboseoption=="True":
+        rootTF = os.path.splitext(os.path.basename(tf_motif_filename))[0]+"_"
+        output_prefix = os.path.splitext(os.path.basename(atac_peaks_filename))[0]
+        boutput_dir = os.path.join(output_dir, "temp")
+        boutput_dir = os.path.join(boutput_dir, "")
+        ensure_dir(boutput_dir)
+        bedfilenamepre = boutput_dir+rootTF+output_prefix
+        finalbeddir = os.path.join(output_dir, "bedfiles")
+        finalbeddir = os.path.join(finalbeddir, "")
+        ensure_dir(finalbeddir)
+        finalbedfile = finalbeddir+rootTF+output_prefix+".bed"
     HISTOGRAM_BINS = 150
     pool = multiprocessing.Pool(mp_threads)
     results = pool.map(partial( find_motifs_in_chrom, \
-                                files=[tf_motif_filename, atac_peaks_filename],verboseoption=verboseoption,output_dir=output_dir), \
+                                files=[tf_motif_filename, atac_peaks_filename],verboseoption=verboseoption,bedfilenamepre=bedfilenamepre,removemotifscountedmorethanonce=removemotifscountedmorethanonce,removemotififmidisoutsideH=removemotififmidisoutsideH), \
                        CHROMOSOMES)
     pool.close()
     pool.join()
-
     results_matching_motif = [x for x in results if x is not None]
     if len(results_matching_motif) > 0:
         sums = np.sum(results_matching_motif, axis=0)
@@ -218,6 +268,20 @@ def get_md_score(tf_motif_filename, mp_threads, atac_peaks_filename, genome,verb
         # TODO: Use the motif sequences to generate a logo for each motif, based
         #       only on the overlapping ATAC-Seq peaks
         if overall_g_H >= 0:
+            if verboseoption=="True":
+            #suck in a bed files and spit out a sorted bed file then delete all the temp files
+                dfs = []
+                for chrname in CHROMOSOMES:
+                   bedfile = bedfilenamepre+"__"+chrname+".bed"
+                   try:
+                       df = pd.read_csv(bedfile)
+                       dfs.append(df)
+                   except:
+                       pass
+                finaldf = pd.concat(dfs,ignore_index=True,sort=False)       
+                #output as a bed file and combine input files to get bed12
+                finaldf = makebed12(finaldf, tf_motif_filename, atac_peaks_filename)
+                finaldf.to_csv(finalbedfile,sep="\t",index=False)
             return [float(overall_g_h + 1)/(overall_g_H + 1), \
                     (overall_g_h + 1), \
                     (overall_g_H + 1), \
@@ -252,14 +316,14 @@ def main():
         print ("verbose is on")
     #evaluation_radius = 750   # in bps
     ATAC_WIDTH_THRESHOLD = 5000   # in bp
-
+    removemotifscountedmorethanonce=True #this is here in case people only want the motif assigend to one ATAC peak
+    removemotififmidisoutsideH=True #this allows people to remove motifs whose midpoints are outside of H
     print('Starting --- ' + str(datetime.datetime.now()))
     atac_peaks_file = open(args.atac_peaks_filename)
     output_prefix = os.path.splitext(os.path.basename(args.atac_peaks_filename))[0]
     atac_csv_reader = csv.reader(atac_peaks_file, delimiter='\t')
     atac_line = next(atac_csv_reader)
     atac_peak_count = 0
-
     # skip the BedGraph headers
     while(atac_line[0][0] == '#'):
         atac_line = next(atac_csv_reader)
@@ -300,7 +364,7 @@ def main():
         filename_no_path = filename.split('/')[-1]
         if os.path.getsize(filename) > 0 and \
            os.path.basename(filename).endswith(tuple(['.bed', '.BedGraph', '.txt'])):
-            [md_score, small_window, large_window, motif_site_count, heat] = get_md_score(filename, int(args.mp_threads), args.atac_peaks_filename, args.genome,verboseoption, args.output_dir)
+            [md_score, small_window, large_window, motif_site_count, heat] = get_md_score(filename, int(args.mp_threads), args.atac_peaks_filename, args.genome,verboseoption, args.output_dir, removemotifscountedmorethanonce,removemotififmidisoutsideH)
             print('The MD-score for ATAC reads vs %s is %.6f' % (filename_no_path, md_score))
             motif_stats.append({ 'motif_file': filename_no_path, \
                                  'md_score': md_score, \
@@ -318,7 +382,6 @@ def main():
                           (stat['motif_file'], stat['md_score'], stat['small_window'], \
                            stat['large_window'], stat['motif_site_count'], stat['heat']))
     md_score_fp.close()
-
     print('All done --- %s' % str(datetime.datetime.now()))
     sys.exit(0)
 
